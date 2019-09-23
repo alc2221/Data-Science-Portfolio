@@ -1,0 +1,504 @@
+---
+title: "Lyrics ShinyApp"
+author: "Chengliang Tang, Arpita Shah, Yujie Wang and Tian Zheng"
+output: html_notebook
+runtime: shiny
+---
+
+"lyrics_filter.csv" is a filtered corpus of 380,000+ song lyrics from from MetroLyrics. You can read more about it on [Kaggle](https://www.kaggle.com/gyani95/380000-lyrics-from-metrolyrics).
+
+"info_artist.csv" provides the background information of all the artistis. These information are scraped from [LyricsFreak](https://www.lyricsfreak.com/).
+
+Here, we explore these data sets and try to find interesting patterns.
+
+### Load all the required libraries
+
+From the packages' descriptions:
+
++ `tidyverse` is an opinionated collection of R packages designed for data science. All packages share an underlying design philosophy, grammar, and data structures;
++ `tidytext` allows text mining using 'dplyr', 'ggplot2', and other tidy tools;
++ `plotly` allows plotting interactive graphs;
++ `DT` provides an R interface to the JavaScript library DataTables;
++ `tm` is a framework for text mining applications within R;
++ `scales` map data to aesthetics, and provide methods for automatically determining breaks and labels for axes and legends;
++ `data.table` is a package for fast aggregation of large data;
++ `wordcloud2` provides an HTML5 interface to wordcloud for data visualization;
++ `gridExtra` contains miscellaneous functions for "grid" graphics;
++ `ngram` is for constructing n-grams (“tokenizing”), as well as generating new text based on the n-gram structure of a given text input (“babbling”);
++ `Shiny` is an R package that makes it easy to build interactive web apps straight from R;
+
+```{r load libraries, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(plotly)
+library(DT)
+library(tm)
+library(data.table)
+library(scales)
+library(wordcloud2)
+library(gridExtra)
+library(ngram)
+library(shiny) 
+```
+
+
+### Load the processed lyrics data along with artist information
+
+We use the processed data and artist information for our analysis.
+
+```{r load data, warning=FALSE, message=FALSE}
+# load lyrics data
+#load('../output/processed_lyrics.RData') 
+# load artist information
+dt_artist <- fread('data/artists.csv') 
+```
+
+### Preparations for visualization
+```{r}
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+
+addl_stopwords <- c("niggas", "niggaz") #remove racially charged words
+dt_lyrics_1_a <-dt_lyrics  #create new tibble to remove additional stopwords from
+
+x <- dt_lyrics_1_a$stemmedwords       #stemmedwords data
+x  <-  removeWords(x,addl_stopwords)     #Remove additional stopwords
+dt_lyrics_1_a$stemmedwords <- x        #correct column by matching stemmedwords column to match x 
+```
+
+
+
+### Specify the user interface for the R Shiny app
+```{r}
+# Define UI for app that draws a histogram ----
+ui <- navbarPage(strong("Lyrics Analysis"),
+  tabPanel("Overview",
+    titlePanel("Most frequent words"),
+    # Sidebar layout with input and output definitions ----
+    sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords1",
+                    label = "Number of terms in the first word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre1', 'Genre of the first word cloud', 
+                    lyrics_list, selected='Folk')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC1", height = "300")
+    )
+  ),
+  hr(),
+  sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords2",
+                    label = "Number of terms in the second word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre2', 'Genre of the second word cloud', 
+                    lyrics_list, selected='Metal')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC2", height = "300")
+    )
+  )
+           ),
+  tabPanel("Time Variation",
+           # Sidebar layout with input and output definitions ----
+          sidebarLayout(
+            # Sidebar panel for inputs ----
+            sidebarPanel(
+              selectInput('decade1', 'Selected decade for the first plot:', 
+                          time_list, selected='1970s'),
+              selectInput('decade2', 'Selected decade for the second plot:', 
+                          time_list, selected='1980s'),
+              numericInput(inputId = "topBigrams",
+                                          label = "Number of top pairs to view:",
+                                          min = 1,
+                                          max = 20,
+                                          value = 10)
+      
+          ),
+          # Main panel for displaying outputs ----
+          mainPanel(
+            fluidRow(
+              column(5,
+                     plotlyOutput("bigram1")),
+              column(5,
+                     plotlyOutput("bigram2"))
+            )
+          )
+        )
+           ),
+  tabPanel("Data", 
+           DT::dataTableOutput("table"))
+)
+```
+
+
+### Develop the server for the R Shiny app
+This shiny app visualizes summary of data and displays the data table itself.
+
+# Define server logic required for ui ----
+###changed to lyrics_2
+```{r}
+server <- function(input, output) {
+  output$WC1 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_1_a$genre == input$genre1)), word, sort = TRUE) %>%
+      slice(1:input$nwords1) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$WC2 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_1_a$genre == input$genre2)), word, sort = TRUE) %>%
+      slice(1:input$nwords2) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$bigram1 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade1, 1, 4))
+    dt_sub <- filter(dt_lyrics_1_a, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$bigram2 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade2, 1, 4))
+    dt_sub <- filter(dt_lyrics_1_a, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$table <- DT::renderDataTable({
+    DT::datatable(dt_lyrics_1_a)
+  })
+}
+```
+
+### Run the R Shiny app
+
+```{r shiny app, warning=FALSE, message=FALSE}
+shinyApp(ui, server)
+```
+Here, we examine the number of duplicate rows by lyrics. How many are repeats of songs by the same artist (possibly across more than once album)? 9565! This could have an effect on our most common words.
+
+Additionally, there are 9671 total repeats by lyrics only. Subtract the two to find the number of songs covers (by another artist) in the dataset: 106
+```{r}
+#repeats by both artist and stemmed words (lyrics)
+repeats_same_artist <- dt_lyrics_1_a[(duplicated(dt_lyrics_1_a$stemmedwords)&duplicated(dt_lyrics_1_a$artist)), ]
+
+#repeats by stemmed words alone 
+repeats_stemmed_words_only <- dt_lyrics_1_a[duplicated(dt_lyrics_1_a$stemmedwords), ]
+```
+
+Remove songs repeated across albums by the same artists for more accurate word counts:
+```{r}
+dt_lyrics_1_a %>% distinct(artist, stemmedwords, .keep_all = TRUE)
+```
+Remove love, time, baby, ill, ive, youre, heart because they show up the word cloud for every genre. So do night and day, but it's interesting to see which genres have a larger emphasis on night vs which emphasize day. Also remove "chorus" because it is often used for labeling purposes rather than as a lyric.
+
+#code direction for removing additional words from https://stackoverflow.com/questions/40901100/remove-certain-words-in-string-from-column-in-dataframe-in-r
+```{r}
+common_words <- c("love", "time", "baby", "ill", "ive", "youre", "heart", "chorus")
+dt_lyrics_2 <- dt_lyrics_1_a
+
+y <- dt_lyrics_2$stemmedwords
+y <- removeWords(y, common_words)     #Remove additional stopwords
+dt_lyrics_2$stemmedwords <- y         #correct column by matching stemmedwords column to match y
+
+
+
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics_2$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+
+```
+
+
+
+### Preparations for visualization, more accurate data breakdown
+```{r}
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics_2$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+```
+
+
+
+### Specify the user interface for the R Shiny app
+```{r}
+# Define UI for app that draws a histogram ----
+ui <- navbarPage(strong("Lyrics Analysis"),
+  tabPanel("Overview",
+    titlePanel("Most frequent words"),
+    # Sidebar layout with input and output definitions ----
+    sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords1",
+                    label = "Number of terms in the first word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre1', 'Genre of the first word cloud', 
+                    lyrics_list, selected='Folk')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC1", height = "300")
+    )
+  ),
+  hr(),
+  sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords2",
+                    label = "Number of terms in the second word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre2', 'Genre of the second word cloud', 
+                    lyrics_list, selected='Metal')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC2", height = "300")
+    )
+  )
+           ),
+  tabPanel("Time Variation",
+           # Sidebar layout with input and output definitions ----
+          sidebarLayout(
+            # Sidebar panel for inputs ----
+            sidebarPanel(
+              selectInput('decade1', 'Selected decade for the first plot:', 
+                          time_list, selected='1970s'),
+              selectInput('decade2', 'Selected decade for the second plot:', 
+                          time_list, selected='1980s'),
+              numericInput(inputId = "topBigrams",
+                                          label = "Number of top pairs to view:",
+                                          min = 1,
+                                          max = 20,
+                                          value = 10)
+      
+          ),
+          # Main panel for displaying outputs ----
+          mainPanel(
+            fluidRow(
+              column(5,
+                     plotlyOutput("bigram1")),
+              column(5,
+                     plotlyOutput("bigram2"))
+            )
+          )
+        )
+           ),
+  tabPanel("Data", 
+           DT::dataTableOutput("table"))
+)
+```
+
+
+### Develop the server for the R Shiny app
+This shiny app visualizes summary of data and displays the data table itself.
+
+# Define server logic required for ui ----
+###changed to lyrics_2
+```{r}
+server <- function(input, output) {
+  output$WC1 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_2$genre == input$genre1)), word, sort = TRUE) %>%
+      slice(1:input$nwords1) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$WC2 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_2$genre == input$genre2)), word, sort = TRUE) %>%
+      slice(1:input$nwords2) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$bigram1 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade1, 1, 4))
+    dt_sub <- filter(dt_lyrics_2, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$bigram2 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade2, 1, 4))
+    dt_sub <- filter(dt_lyrics_2, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$table <- DT::renderDataTable({
+    DT::datatable(dt_lyrics_2)
+  })
+}
+```
+
+### Run the R Shiny app
+
+```{r shiny app, warning=FALSE, message=FALSE}
+shinyApp(ui, server)
+```
+Let's separate each song into individual lyrics:
+```{r}
+lyrics_words_all <- dt_lyrics_1_a %>%
+  unnest_tokens(word,stemmedwords)
+
+tidy_lyrics_1_a<- lyrics_words_all %>%
+  count(word, sort = TRUE)
+
+tidy_lyrics_1_a
+```
+
+```{r}
+tidy_lyrics_1_a %>%
+  arrange(desc(n)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  top_n(25) %>% 
+  ggplot(aes(word, n, fill="green")) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common words", y = "number of occurences in dataset ") +
+  coord_flip()
+
+```
+
+```{r}
+tidy_lyrics <- dt_lyrics_2 %>%
+  unnest_tokens(word,stemmedwords)
+
+lyrics_words_genre <- tidy_lyrics %>%
+  count(word, genre, sort = TRUE) 
+
+```
+
+```{r}
+lyrics_words_year <- tidy_lyrics %>%
+  count(word, year, sort = TRUE) 
+
+```
+
+
+Now, we can see trends in the data!
+
+graphing codes from https://www.tidytextmining.com/tfidf.html
+
+
+```{r}
+library(ggplot2)
+
+lyrics_words_genre %>%
+  arrange(desc(n)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(genre) %>% 
+  top_n(12) %>% 
+  ungroup() %>%
+  ggplot(aes(word, n, fill = genre)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common words", y = "number of occurences in genre ") +
+  facet_wrap(~genre, ncol = 2, scales = "free") +
+  coord_flip()
+
+```
+
+Let's take a closer look at bigrams. What goes with "home?" We see this word quite a bit in Country and Folk lyrics, and even some in R&B and Rock songs.
+```{r}
+lyric_bigrams <- dt_lyrics_1_a %>%
+  unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+   
+bigram_counts <- lyric_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  count(word1, word2, sort = TRUE)
+```
+
+```{r}
+#home in bigram
+lyric_bigrams_home <- lyric_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter((word1 == "home")|(word2 == "home")) %>%
+  unite(genre, bigram, word1, word2, sep =",")
+  count(genre, bigram, sort = TRUE)
+#count(genre, word1, word2, sort = TRUE)
+
+
+
+```
+
+```{r}
+#Graph
+lyrics_bigrams_home %>%
+  arrange(desc(n)) %>%
+  mutate(bigram = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(genre) %>% 
+  top_n(12) %>% 
+  ungroup() %>%
+  ggplot(aes(word, n, fill = genre)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common words", y = "number of occurences in genre ") +
+  facet_wrap(~genre, ncol = 2, scales = "free") +
+  coord_flip()
+```
+
+
+
+
+
+
