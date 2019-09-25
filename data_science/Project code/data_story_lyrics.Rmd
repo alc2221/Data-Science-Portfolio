@@ -1,0 +1,667 @@
+---
+title: "Data Story: The Words We Sing"
+author: "Ashley Culver"
+output: html_notebook
+runtime: shiny
+---
+
+>#**Data Story: The Words We Sing**
+>#**How are genres of music characterized by lyrics? Are some more positive than others?**
+<center>By Ashley Culver</center>  
+![music](../figs/music.jpg) 
+
+<font size=3>
+Music is an expression of culture. Lyrics are poetry set to music - they act as a conduit to connect with others, tell a story, and resonate with a particular audience.
+
+How is genre (Pop, R&B, Country, etc) connected to sentiment? Are some genres more positive or negative than others? What types of values and connected themes are portrayed across different genres?
+
+Here, we explore a set of lyrics from Metrolyrics.com to try to find interesting patterns. 
+
+First, let's take a look at a word cloud of the lyrics used in each genre and the most common bigrams (pairs of consecutive words) by decade:
+```{r load libraries, warning=FALSE, message=FALSE}
+# Load all the required libraries
+library(tidyverse)
+library(tidytext)
+library(plotly)
+library(DT)
+library(tm)
+library(data.table)
+library(scales)
+library(wordcloud2)
+library(gridExtra)
+library(ngram)
+library(shiny) 
+library(ggplot2)
+library(textdata)
+```
+
+```{r,warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Load the processed lyrics data along with artist information
+
+# load lyrics data
+load('../output/processed_lyrics.RData') 
+
+# load artist information
+#dt_artist <- fread('data/artists.csv') 
+```
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Preparations for visualization
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+```
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+###Additional text cleaning
+addl_stopwords <- c("niggas", "niggaz") #remove racially charged words
+dt_lyrics_1_a <-dt_lyrics  #create new tibble to remove additional stopwords
+
+x <- dt_lyrics_1_a$stemmedwords       #stemmedwords data
+x  <-  removeWords(x,addl_stopwords)     #Remove additional stopwords
+dt_lyrics_1_a$stemmedwords <- x        #correct column by matching stemmedwords column to match x 
+```
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Specify the user interface for the R Shiny app
+
+# Define UI for app that draws a histogram ----
+ui <- navbarPage(strong("Lyrics Analysis"),
+  tabPanel("Overview",
+    titlePanel("Most frequent words"),
+    # Sidebar layout with input and output definitions ----
+    sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords1",
+                    label = "Number of terms in the first word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre1', 'Genre of the first word cloud', 
+                    lyrics_list, selected='Folk')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC1", height = "300")
+    )
+  ),
+  hr(),
+  sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords2",
+                    label = "Number of terms in the second word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre2', 'Genre of the second word cloud', 
+                    lyrics_list, selected='Metal')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC2", height = "300")
+    )
+  )
+           ),
+  tabPanel("Time Variation",
+           # Sidebar layout with input and output definitions ----
+          sidebarLayout(
+            # Sidebar panel for inputs ----
+            sidebarPanel(
+              selectInput('decade1', 'Selected decade for the first plot:', 
+                          time_list, selected='1970s'),
+              selectInput('decade2', 'Selected decade for the second plot:', 
+                          time_list, selected='1980s'),
+              numericInput(inputId = "topBigrams",
+                                          label = "Number of top pairs to view:",
+                                          min = 1,
+                                          max = 20,
+                                          value = 10)
+      
+          ),
+          # Main panel for displaying outputs ----
+          mainPanel(
+            fluidRow(
+              column(5,
+                     plotlyOutput("bigram1")),
+              column(5,
+                     plotlyOutput("bigram2"))
+            )
+          )
+        )
+           ),
+  tabPanel("Data", 
+           DT::dataTableOutput("table"))
+)
+```
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Develop the server for the R Shiny app
+#This shiny app visualizes summary of data and displays the data table itself.
+
+# Define server logic required for ui ----
+###changed to lyrics_2
+server <- function(input, output) {
+  output$WC1 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_1_a$genre == input$genre1)), word, sort = TRUE) %>%
+      slice(1:input$nwords1) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$WC2 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_1_a$genre == input$genre2)), word, sort = TRUE) %>%
+      slice(1:input$nwords2) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$bigram1 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade1, 1, 4))
+    dt_sub <- filter(dt_lyrics_1_a, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$bigram2 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade2, 1, 4))
+    dt_sub <- filter(dt_lyrics_1_a, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$table <- DT::renderDataTable({
+    DT::datatable(dt_lyrics_1_a)
+  })
+}
+```
+
+### Run the R Shiny app
+
+```{r shiny_2 app, warning=FALSE, message=FALSE}
+shinyApp(ui, server)
+```
+
+Immediately, a few observations jump out: love, time, night, and day, are pretty common themes. Additionally, we can see that conjunctions addressing personhood ("you're" and "I'll") are pretty frequent.
+
+
+##Part 1: Song Analysis: 
+
+Here, we examine the number of duplicate rows by lyrics. How many are repeats of songs by the same artist (possibly across more than once album)? 9605! This could have an effect on our most common words.
+
+Additionally, there are 9671 total repeats by lyrics only. Subtract the two to find the number of songs covers (by another artist) in the dataset: 66
+```{r,warning=FALSE,error=FALSE,message=FALSE}
+#repeats by both artist and stemmed words (lyrics)
+repeats_same_artist <- dt_lyrics_1_a[(duplicated(dt_lyrics_1_a$stemmedwords)&duplicated(dt_lyrics_1_a$artist)), ]
+
+#repeats by stemmed words alone 
+repeats_stemmed_words_only <- dt_lyrics_1_a[duplicated(dt_lyrics_1_a$stemmedwords), ]
+
+repeats_across_artist <- dim(repeats_same_artist)[1]
+repeats_across_all <- dim(repeats_stemmed_words_only)[1]
+
+repeats <- data.frame(repeats_across_artist, repeats_across_all)
+repeats
+```
+
+Let's remove songs repeated across albums by the same artists for more accurate word counts:
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+dt_lyrics_1_a %>% distinct(artist, stemmedwords, .keep_all = TRUE)
+```
+To get a sense of some other differentiable characteristics of genres, remove words "love", "time", "baby", "ill", "ive", "youre", and "heart" because they show up the word cloud for every genre. So do "night" and "day", but it's interesting to see which genres have a larger emphasis on night vs which emphasize day. Also remove "chorus" because it is often used for labeling purposes in the dataset rather than as a lyric.
+
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+#code direction for removing additional words from https://stackoverflow.com/questions/40901100/remove-certain-words-in-string-from-column-in-dataframe-in-r
+
+common_words <- c("love", "time", "baby", "ill", "ive", "youre", "heart", "chorus")
+dt_lyrics_2 <- dt_lyrics_1_a
+
+y <- dt_lyrics_2$stemmedwords
+y <- removeWords(y, common_words)     #Remove additional stopwords
+dt_lyrics_2$stemmedwords <- y         #correct column by matching stemmedwords column to match y
+```
+
+Let's look at the word clouds again, this time with common words removed:
+
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Preparations for visualization using more accurate data breakdown
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics_2$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+```
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+### Specify the user interface for the R Shiny app
+
+# Define UI for app that draws a histogram ----
+ui <- navbarPage(strong("Lyrics Analysis"),
+  tabPanel("Overview",
+    titlePanel("Most frequent words"),
+    # Sidebar layout with input and output definitions ----
+    sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords1",
+                    label = "Number of terms in the first word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre1', 'Genre of the first word cloud', 
+                    lyrics_list, selected='Folk')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC1", height = "300")
+    )
+  ),
+  hr(),
+  sidebarLayout(
+      # Sidebar panel for inputs ----
+      sidebarPanel(
+        sliderInput(inputId = "nwords2",
+                    label = "Number of terms in the second word cloud:",
+                    min = 5, max = 100, value = 50),
+        selectInput('genre2', 'Genre of the second word cloud', 
+                    lyrics_list, selected='Metal')
+    ),
+    # Main panel for displaying outputs ----
+    mainPanel(
+      wordcloud2Output(outputId = "WC2", height = "300")
+    )
+  )
+           ),
+  tabPanel("Time Variation",
+           # Sidebar layout with input and output definitions ----
+          sidebarLayout(
+            # Sidebar panel for inputs ----
+            sidebarPanel(
+              selectInput('decade1', 'Selected decade for the first plot:', 
+                          time_list, selected='1970s'),
+              selectInput('decade2', 'Selected decade for the second plot:', 
+                          time_list, selected='1980s'),
+              numericInput(inputId = "topBigrams",
+                                          label = "Number of top pairs to view:",
+                                          min = 1,
+                                          max = 20,
+                                          value = 10)
+      
+          ),
+          # Main panel for displaying outputs ----
+          mainPanel(
+            fluidRow(
+              column(5,
+                     plotlyOutput("bigram1")),
+              column(5,
+                     plotlyOutput("bigram2"))
+            )
+          )
+        )
+           ),
+  tabPanel("Data", 
+           DT::dataTableOutput("table"))
+)
+```
+
+```{r}
+### Develop the server for the R Shiny app
+#This shiny app visualizes summary of data and displays the data table itself.
+
+# Define server logic required for ui ----
+###changed to lyrics_2
+
+server <- function(input, output) {
+  output$WC1 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_2$genre == input$genre1)), word, sort = TRUE) %>%
+      slice(1:input$nwords1) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$WC2 <- renderWordcloud2({
+    count(filter(word_tibble, id %in% which(dt_lyrics_2$genre == input$genre2)), word, sort = TRUE) %>%
+      slice(1:input$nwords2) %>%
+      wordcloud2(size=0.6, rotateRatio=0.2)
+  })
+  output$bigram1 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade1, 1, 4))
+    dt_sub <- filter(dt_lyrics_2, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$bigram2 <- renderPlotly({
+    year_start <- as.integer(substr(input$decade2, 1, 4))
+    dt_sub <- filter(dt_lyrics_2, year>=year_start) %>%
+      filter(year<(year_start+10))
+    lyric_bigrams <- dt_sub %>%
+      unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+    bigram_counts <- lyric_bigrams %>%
+      separate(bigram, c("word1", "word2"), sep = " ") %>%
+      count(word1, word2, sort = TRUE)
+    combined_words <- apply(bigram_counts[c(1, 2)], 1, paste , collapse = " " )[1:input$topBigrams]
+    x_names <- factor(combined_words, levels = rev(combined_words))
+    plot_ly(
+      x = bigram_counts$n[1:input$topBigrams],
+      y = x_names,
+      name = "Bigram",
+      type = "bar",
+      orientation = 'h'
+    )
+  })
+  output$table <- DT::renderDataTable({
+    DT::datatable(dt_lyrics_2)
+  })
+}
+```
+
+
+```{r shiny app_1, warning=FALSE, message=FALSE, error = FALSE}
+### Run the R Shiny app
+
+shinyApp(ui, server)
+```
+
+How many songs are in each genre?
+```{r, warning=FALSE, message=FALSE}
+counts <- table(dt_lyrics_1_a$genre)
+barplot(counts, main = "# songs by genre", xlab = "genre", ylab = "# songs", col = "blue")
+```
+
+
+
+Let's separate each song into individual lyrics using our original, full set of lyrics (including words like "love"). What are the most common words across the entire dataset?
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+lyrics_words_all <- dt_lyrics_1_a %>%
+  unnest_tokens(word,stemmedwords)
+
+tidy_lyrics_1_a<- lyrics_words_all %>%
+  count(word, sort = TRUE)
+```
+
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+tidy_lyrics_1_a %>%
+  arrange(desc(n)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  top_n(25) %>% 
+  ggplot(aes(word, n, fill="green")) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common words", y = "number of occurences in dataset ") +
+  ggtitle("Most common words across dataset") +
+  coord_flip()
+
+```
+
+```{r, warning=FALSE, echo = FALSE, message=FALSE}
+###create set of lyrics divided by genre
+tidy_lyrics <- dt_lyrics_1_a %>%
+  unnest_tokens(word,stemmedwords)
+
+lyrics_words_genre <- tidy_lyrics %>%
+  count(word, genre, sort = TRUE) 
+```
+
+
+Now, we can see trends in the data!
+
+Love is the most common word in every genre except Metal (where it still ranks highly, but is eclipsed by "time" and "life"). In Hip-Hop, "love" is closely followed in counts by "shit" (which is uniquely high-ranking in Hip-Hop). 
+
+
+```{r, warning=FALSE, message=FALSE}
+#graphing codes from https://www.tidytextmining.com/tfidf.html
+#separate words by genre graphically
+
+lyrics_words_genre %>%
+  arrange(desc(n)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(genre) %>% 
+  top_n(12) %>% 
+  ungroup() %>%
+  ggplot(aes(word, n, fill = genre)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common words", y = "number of occurences in genre ") +
+  facet_wrap(~genre, ncol = 2, scales = "free") +
+  coord_flip()
+
+```
+
+Let's take a closer look at bigrams. Which are the most common?
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#assign bigrams
+lyric_bigrams <- dt_lyrics_1_a %>%
+  unnest_tokens(bigram, stemmedwords, token = "ngrams", n = 2)
+lyric_bigrams <- lyric_bigrams[ , c(4, 7)]
+
+#count bigrams into words for later use
+bigrams <- lyric_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigram_count <- count(bigrams,word1, word2, sort = TRUE)
+
+bigrams <- unite(bigrams, bigram, c(word1, word2), sep = " ", remove = FALSE)
+#bigrams <- bigrams[ ,c(4, 7, 8, 9)]
+```
+
+```{r, warning = FALSE, message = FALSE, error = FALSE, echo = FALSE}
+#look at bigram counts by genre
+bigram_counts_genre  <- lyric_bigrams %>%
+  count(bigram, genre, sort = TRUE)
+```
+
+```{r, warning = FALSE, message = FALSE}
+# look at most common bigrams by genre
+bigram_counts_genre %>%
+  arrange(desc(n)) %>%
+  mutate(word = factor(bigram, levels = rev(unique(bigram)))) %>% 
+  group_by(genre) %>% 
+  top_n(12) %>% 
+  ungroup() %>%
+  ggplot(aes(word, n, fill = genre)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "most common bigrams", y = "number of occurences in genre ") +
+  ggtitle("Most common bigrams by genre") +
+  facet_wrap(~genre, ncol = 2, scales = "free") +
+  coord_flip()
+```
+
+Let's see what percentage of each genre is represented by the lyric "home":
+```{r, warning = FALSE, message = FALSE}
+#save for all calculations; # bigrams total by genre
+bigram_counts <- table(lyric_bigrams$genre)
+
+#home
+lyric_bigrams_home <- filter(bigrams,((word1 == "home")|(word2 == "home")))
+bigram_counts_home <- table(lyric_bigrams_home$genre)
+barplot(bigram_counts_home/bigram_counts, main = "percentage home counts by genre", xlab = "genre", ylab = "% lyrics", col = "blue")
+```
+
+We see that Indie, Country, and R&B have the highest percentage of "home" bigrams, followed by Folk, Jazz, and Rock. Home is a concept that can be tied to having a place of one's own, often from a comfort standpoint. Could this be a reflection of trying to resonate with a culture valuing commitment and comfort?
+
+How about "dream"?
+```{r, warning = FALSE, message = FALSE}
+lyric_bigrams_dream <- filter(bigrams,((word1 == "dream")|(word2 == "dream")))
+
+bigram_counts_dream <- table(lyric_bigrams_dream$genre)
+barplot(bigram_counts_dream/bigram_counts, main = "percentage dream counts by genre", xlab = "genre", ylab = "% lyrics", col = "blue")
+```
+Here the clear standouts are Jazz with over 1.4% of bigrams including "dream", and Hip-Hop which mentions "dream" less frequently than Jazz does by a factor of 7! "dream" can be connected to abstract (as opposed to concrete) goals or episodes that occur outside reality. Could it be that Jazz is more about imagination and the hypothetical, while Hip-Hop is more about the real and concrete?
+
+Let's see "day" and "night" as a comparison:
+```{r, warning = FALSE, message = FALSE}
+#day
+lyric_bigrams_day <- filter(bigrams,((word1 == "day")|(word2 == "day")))
+bigram_counts_day <- table(lyric_bigrams_day$genre)
+
+#night
+lyric_bigrams_night <- filter(bigrams,((word1 == "night")|(word2 == "night")))
+bigram_counts_night <- table(lyric_bigrams_night$genre)
+
+```
+
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+#graph day v night
+df_temporal <- rbind(bigram_counts_day/bigram_counts, bigram_counts_night/bigram_counts)
+barplot(df_temporal, main = "percentage day vs night counts by genre", xlab = "genre", ylab = "% lyrics", col=c("lightblue","darkblue"), legend = c("day", "night"), beside = TRUE)
+```
+
+We can see that "day" is a more frequent theme than "night" in all genres in this dataset, with the exception of Electronic. Electronic music is often listened to at night, in dark spaces where listeners are equipped with fluorescent accessories.  This is one hypothesis as to why Electronic music explicitly mentions night more frequently than day.
+
+How about gendered words? Let's look specifically at "boy" vs "girl":
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+#boy
+lyric_bigrams_boy <- filter(bigrams,((word1 == "boy")|(word2 == "boy")))
+bigram_counts_boy <- table(lyric_bigrams_boy$genre)
+
+#girl
+lyric_bigrams_girl <- filter(bigrams,((word1 == "girl")|(word2 == "girl")))
+bigram_counts_girl <- table(lyric_bigrams_girl$genre)
+```
+
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+#graph boy v girl
+df_gender <- rbind(bigram_counts_boy/bigram_counts, bigram_counts_girl/bigram_counts)
+barplot(df_gender, main = "percentage boy vs girl counts by genre", xlab = "genre", ylab = "% lyrics", col=c("black","red"), legend = c("boy", "girl"), beside = TRUE)
+```
+This is the most stark comparison yet - it seems that in all genres, "girl" is mentioned more explictly than "boy", and in the case of Hip-Hop, Pop, and R&B, "girl" is mentioned more than 2x as frequently as "boy"!
+
+For fun, let's throw "love"" in the mix:
+
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+#love
+lyric_bigrams_love <- filter(bigrams,((word1 == "love")|(word2 == "love")))
+bigram_counts_love <- table(lyric_bigrams_love$genre)
+
+
+#graph boy v girl v love
+df_gender_love <-rbind(bigram_counts_boy/bigram_counts, bigram_counts_girl/bigram_counts, bigram_counts_love/bigram_counts)
+barplot(df_gender_love, main = "percentage boy vs girl vs love counts by genre", xlab = "genre", ylab = "% lyrics", col=c("black","red", "purple"), legend = c("boy", "girl", "love"), beside = TRUE)
+```
+We can see that Hip-Hop has the smallest gap between counts of "love" and "girl", and that Jazz has an unusually high gap between "love" and "girl" compared to other genres. This is in line with the hypothesis that imagination or an ethereal state is more associated with Jazz, and reality/concreteness with Hip-Hop: girls are objectively tangible, while love is not. 
+
+Let's do a sentiment analysis to see how negative or positive each genre is:
+```{r, echo=FALSE, warning=FALSE,error=FALSE,message=FALSE}
+# Code from https://paldhous.github.io/NICAR/2019/r-text-analysis.html
+# load lexicon from https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html
+bing <- get_sentiments("bing")
+
+# join sentiments
+sentiments <- lyrics_words_all %>%
+  inner_join(bing, by = "word") #%>%
+
+sentiments_counts <- sentiments %>%
+  group_by(genre) %>%
+  count(sentiment) %>%
+  arrange(-n)
+
+negative_freqs <- sentiments_counts %>%
+  left_join(sentiments_counts %>% 
+              group_by(genre) %>% 
+              summarise(total = sum(n))) %>%
+  mutate(percent = round(n/total*100,2)) %>%
+  filter(sentiment == "negative")
+
+negative_freqs
+```
+
+```{r,warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+positive_freqs <- sentiments_counts %>%
+  left_join(sentiments_counts %>% 
+              group_by(genre) %>% 
+              summarise(total = sum(n))) %>%
+  mutate(percent = round(n/total*100,2)) %>%
+  filter(sentiment == "positive")
+
+positive_freqs
+```
+We see that the most positive genres (using the bing sentiment database) are Jazz (our potentially imaginitive and abstract genre), R&B, Pop, and Country. The most negative are Metal (see the word clouds from earlier - that's a lot of death!) and Hip-Hop (our potentially realist category).
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+positive_freqs %>%
+  arrange(desc(percent)) %>%
+  mutate(word = factor(genre, levels = rev(unique(genre)))) %>% 
+  #top_n(25) %>% 
+  ggplot(aes(genre, percent, color="blue")) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "genre", y = "percent positivity") +
+  ggtitle("How positive is the genre?")+
+  coord_flip()
+```
+
+
+
+```{r, warning=FALSE,error=FALSE,echo=FALSE,message=FALSE}
+nrc_word_counts <- lyrics_words_genre %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+```
+What is the breakdown of sentiment by genre? We see that some genres (Jazz, R&B) have a more balanced positive v negative measure. In general, a surprising find is that anger and trust seem to occur in roughly similar frequencies within a given genre.
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+#code adapted from https://www.datacamp.com/community/tutorials/sentiment-analysis-R
+nrc_word_counts %>%
+  group_by(genre) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, nn)) %>%
+  #mutate(word = reorder(word, nn)) %>%
+  ggplot(aes(sentiment, nn, fill = genre)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~genre, scales = "free_y") +
+  labs(y = "sentiment",
+       x = "# counts of sentiment") +
+  ggtitle("Sentiment Breakdown by Genre") +
+  coord_flip()
+```
+
+
+
+References:
+
+"Chengliang Tang, Arpita Shah, Yujie Wang and Tian Zheng"
+"lyrics_filter.csv" is a filtered corpus of 380,000+ song lyrics from from MetroLyrics. You can read more about it on [Kaggle](https://www.kaggle.com/gyani95/380000-lyrics-from-metrolyrics).
+
+"info_artist.csv" provides the background information of all the artistis. These information are scraped from [LyricsFreak](https://www.lyricsfreak.com/).
+
+The sentiment analysis makes use of the NRC Emotion and Sentiment Analysis, created by Saif M. Mohammad and Peter D. Turney at the National Research Council Canada. http://saifmohammad.com/WebPages/lexicons.html
+
+Bing lexicon from https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html
+
+Photo by Spencer Imbrock on Unsplash: https://unsplash.com/photos/JAHdPHMoaEA
+
+Code snippets adapted from https://paldhous.github.io/NICAR/2019/r-text-analysis.html, https://www.tidytextmining.com/, and https://www.datacamp.com/community/tutorials/sentiment-analysis-R
+
+
